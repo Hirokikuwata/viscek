@@ -21,6 +21,16 @@
     <span></span>
   </div>
   <div class="ctrl">
+    <label>フィールドサイズ</label>
+    <input type="range" id="fieldSizeSlider" min="70" max="100" step="1" value="100">
+    <span id="fieldSizeVal">1.00</span>
+  </div>
+  <div class="ctrl">
+    <label>粒子サイズ</label>
+    <input type="range" id="particleSizeSlider" min="40" max="200" step="1" value="100">
+    <span id="particleSizeVal">1.00</span>
+  </div>
+  <div class="ctrl">
     <label>電圧 E / E_c</label>
     <input type="range" id="eSlider" min="100" max="400" step="5" value="200">
     <span id="eVal">2.00</span>
@@ -54,13 +64,19 @@ const nSlider = document.getElementById('nSlider');
 const bSlider = document.getElementById('bSlider');
 const cSlider = document.getElementById('cSlider');
 const shapeSelect = document.getElementById('shapeSelect');
+const fieldSizeSlider = document.getElementById('fieldSizeSlider');
+const particleSizeSlider = document.getElementById('particleSizeSlider');
 const eVal = document.getElementById('eVal');
 const nVal = document.getElementById('nVal');
 const bVal = document.getElementById('bVal');
 const cVal = document.getElementById('cVal');
+const fieldSizeVal = document.getElementById('fieldSizeVal');
+const particleSizeVal = document.getElementById('particleSizeVal');
 
 let E_ratio = 2.0, N = 1350, B_str = 2.0, C_str = 0.10;
 let shapeMode = shapeSelect.value;
+let fieldScale = parseInt(fieldSizeSlider.value) / 100;
+let particleScale = parseInt(particleSizeSlider.value) / 100;
 let SZ = 100;
 const BOX_L = 3.0;
 const DT = 0.06;
@@ -74,9 +90,9 @@ const R_CUT2 = R_CUT * R_CUT;
 const D_REPULSE2 = D_REPULSE * D_REPULSE;
 const CENTER_X = BOX_L * 0.5;
 const CENTER_Y = BOX_L * 0.5;
-const CONFINEMENT_RADIUS = BOX_L * 0.46;
-const DONUT_INNER_RADIUS = BOX_L * 0.20;
-const TRIANGLE_RADIUS = BOX_L * 0.48;
+const BASE_CONFINEMENT_RADIUS = BOX_L * 0.46;
+const BASE_DONUT_INNER_RADIUS = BOX_L * 0.20;
+const BASE_TRIANGLE_RADIUS = BOX_L * 0.48;
 const CONFINEMENT_SOFTNESS = 0.05;
 const CONFINEMENT_PUSH = 0.08;
 const WALL_TANGENT_ALIGN = 0.10;
@@ -84,6 +100,10 @@ const SPEED_GAIN = BOX_L;
 const CELL_SIZE = R_CUT;
 const GRID_N = Math.max(1, Math.ceil(BOX_L / CELL_SIZE));
 const INV_CELL_SIZE = 1 / CELL_SIZE;
+
+function confinementRadius() { return BASE_CONFINEMENT_RADIUS * fieldScale; }
+function donutInnerRadius() { return BASE_DONUT_INNER_RADIUS * fieldScale; }
+function triangleRadius() { return BASE_TRIANGLE_RADIUS * fieldScale; }
 
 let pts = [];
 
@@ -99,10 +119,11 @@ function v0() {
 }
 
 function getTriangleVertices() {
-  const a = TRIANGLE_RADIUS * Math.sin(Math.PI / 3);
-  const b = TRIANGLE_RADIUS * 0.5;
+  const tr = triangleRadius();
+  const a = tr * Math.sin(Math.PI / 3);
+  const b = tr * 0.5;
   return [
-    { x: CENTER_X, y: CENTER_Y - TRIANGLE_RADIUS },
+    { x: CENTER_X, y: CENTER_Y - tr },
     { x: CENTER_X + a, y: CENTER_Y + b },
     { x: CENTER_X - a, y: CENTER_Y + b },
   ];
@@ -133,18 +154,20 @@ function confinementInfo(x, y) {
   const r = Math.sqrt(dx * dx + dy * dy) + 1e-12;
 
   if (shapeMode === 'donut') {
-    const outerDist = CONFINEMENT_RADIUS - r;
-    const innerDist = r - DONUT_INNER_RADIUS;
-    if (r >= DONUT_INNER_RADIUS && r <= CONFINEMENT_RADIUS) {
+    const outerR = confinementRadius();
+    const innerR = donutInnerRadius();
+    const outerDist = outerR - r;
+    const innerDist = r - innerR;
+    if (r >= innerR && r <= outerR) {
       if (outerDist < innerDist) {
         return { inside: true, distToWall: outerDist, nx: -dx / r, ny: -dy / r };
       }
       return { inside: true, distToWall: innerDist, nx: dx / r, ny: dy / r };
     }
-    if (r > CONFINEMENT_RADIUS) {
-      return { inside: false, nx: -dx / r, ny: -dy / r, px: CENTER_X + (dx / r) * CONFINEMENT_RADIUS, py: CENTER_Y + (dy / r) * CONFINEMENT_RADIUS };
+    if (r > outerR) {
+      return { inside: false, nx: -dx / r, ny: -dy / r, px: CENTER_X + (dx / r) * outerR, py: CENTER_Y + (dy / r) * outerR };
     }
-    return { inside: false, nx: dx / r, ny: dy / r, px: CENTER_X + (dx / r) * DONUT_INNER_RADIUS, py: CENTER_Y + (dy / r) * DONUT_INNER_RADIUS };
+    return { inside: false, nx: dx / r, ny: dy / r, px: CENTER_X + (dx / r) * innerR, py: CENTER_Y + (dy / r) * innerR };
   }
 
   if (shapeMode === 'triangle') {
@@ -169,11 +192,12 @@ function confinementInfo(x, y) {
     return { inside: false, nx: -ux, ny: -uy, px: best.cp.x, py: best.cp.y };
   }
 
-  const outerDist = CONFINEMENT_RADIUS - r;
-  if (r <= CONFINEMENT_RADIUS) {
+  const outerR = confinementRadius();
+  const outerDist = outerR - r;
+  if (r <= outerR) {
     return { inside: true, distToWall: outerDist, nx: -dx / r, ny: -dy / r };
   }
-  return { inside: false, nx: -dx / r, ny: -dy / r, px: CENTER_X + (dx / r) * CONFINEMENT_RADIUS, py: CENTER_Y + (dy / r) * CONFINEMENT_RADIUS };
+  return { inside: false, nx: -dx / r, ny: -dy / r, px: CENTER_X + (dx / r) * outerR, py: CENTER_Y + (dy / r) * outerR };
 }
 
 function isInsideConfinement(x, y) {
@@ -182,10 +206,12 @@ function isInsideConfinement(x, y) {
 
 function drawConfinementPath() {
   if (shapeMode === 'donut') {
+    const outerR = confinementRadius();
+    const innerR = donutInnerRadius();
     ctx.beginPath();
-    ctx.arc((CENTER_X / BOX_L) * SZ, (CENTER_Y / BOX_L) * SZ, (CONFINEMENT_RADIUS / BOX_L) * SZ, 0, Math.PI * 2);
-    ctx.moveTo((CENTER_X / BOX_L) * SZ + (DONUT_INNER_RADIUS / BOX_L) * SZ, (CENTER_Y / BOX_L) * SZ);
-    ctx.arc((CENTER_X / BOX_L) * SZ, (CENTER_Y / BOX_L) * SZ, (DONUT_INNER_RADIUS / BOX_L) * SZ, 0, Math.PI * 2);
+    ctx.arc((CENTER_X / BOX_L) * SZ, (CENTER_Y / BOX_L) * SZ, (outerR / BOX_L) * SZ, 0, Math.PI * 2);
+    ctx.moveTo((CENTER_X / BOX_L) * SZ + (innerR / BOX_L) * SZ, (CENTER_Y / BOX_L) * SZ);
+    ctx.arc((CENTER_X / BOX_L) * SZ, (CENTER_Y / BOX_L) * SZ, (innerR / BOX_L) * SZ, 0, Math.PI * 2);
     return;
   }
   if (shapeMode === 'triangle') {
@@ -198,7 +224,7 @@ function drawConfinementPath() {
     return;
   }
   ctx.beginPath();
-  ctx.arc((CENTER_X / BOX_L) * SZ, (CENTER_Y / BOX_L) * SZ, (CONFINEMENT_RADIUS / BOX_L) * SZ, 0, Math.PI * 2);
+  ctx.arc((CENTER_X / BOX_L) * SZ, (CENTER_Y / BOX_L) * SZ, (confinementRadius() / BOX_L) * SZ, 0, Math.PI * 2);
 }
 
 function init() {
@@ -344,7 +370,7 @@ function draw() {
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  const R = SZ * 0.004;
+  const R = SZ * 0.004 * particleScale;
   const speed = v0();
 
   for (const p of pts) {
@@ -401,7 +427,18 @@ shapeSelect.addEventListener('change', e => {
   shapeMode = e.target.value;
   init();
 });
+fieldSizeSlider.addEventListener('input', e => {
+  fieldScale = parseInt(e.target.value) / 100;
+  fieldSizeVal.textContent = fieldScale.toFixed(2);
+  init();
+});
+particleSizeSlider.addEventListener('input', e => {
+  particleScale = parseInt(e.target.value) / 100;
+  particleSizeVal.textContent = particleScale.toFixed(2);
+});
 window.addEventListener('resize', () => { resize(); init(); });
 
+fieldSizeVal.textContent = fieldScale.toFixed(2);
+particleSizeVal.textContent = particleScale.toFixed(2);
 resize(); init(); loop();
 </script>
