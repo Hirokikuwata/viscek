@@ -1,0 +1,302 @@
+
+<style>
+  .ctrl{display:flex;align-items:center;gap:10px;margin:5px 0}
+  .ctrl label{font-size:13px;color:var(--color-text-secondary);min-width:120px}
+  .ctrl input[type=range]{flex:1}
+  .ctrl span{font-size:13px;font-weight:500;min-width:38px;text-align:right;color:var(--color-text-primary)}
+  #canvas{display:block;border-radius:var(--border-radius-lg);border:0.5px solid var(--color-border-tertiary)}
+  #wrap{display:flex;justify-content:center}
+  #phasebar{font-size:12px;color:var(--color-text-secondary);text-align:center;height:18px;margin-bottom:4px;font-weight:500}
+</style>
+
+<div style="padding:0.75rem 0 0.5rem">
+  <div class="ctrl">
+    <label>電圧 E / E_c</label>
+    <input type="range" id="eSlider" min="100" max="400" step="5" value="200">
+    <span id="eVal">2.00</span>
+  </div>
+  <div class="ctrl">
+    <label>粒子数</label>
+    <input type="range" id="nSlider" min="90" max="3600" step="30" value="1350">
+    <span id="nVal">1350</span>
+  </div>
+  <div class="ctrl">
+    <label>反発トルク B</label>
+    <input type="range" id="bSlider" min="0" max="100" step="1" value="40">
+    <span id="bVal">0.40</span>
+  </div>
+  <div class="ctrl">
+    <label>双極子流体 C</label>
+    <input type="range" id="cSlider" min="-100" max="100" step="1" value="10">
+    <span id="cVal">0.10</span>
+  </div>
+</div>
+<div id="phasebar">-</div>
+<div id="wrap"><canvas id="canvas"></canvas></div>
+<div style="font-size:11px;color:var(--color-text-tertiary);text-align:center;margin-top:6px">色 = 運動方向 / 矢印 = 速度ベクトル</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+const eSlider = document.getElementById('eSlider');
+const nSlider = document.getElementById('nSlider');
+const bSlider = document.getElementById('bSlider');
+const cSlider = document.getElementById('cSlider');
+const eVal = document.getElementById('eVal');
+const nVal = document.getElementById('nVal');
+const bVal = document.getElementById('bVal');
+const cVal = document.getElementById('cVal');
+
+let E_ratio = 2.0, N = 1350, B_str = 2.0, C_str = 0.10;
+let SZ = 100;
+const BOX_L = 3.0;
+const DT = 0.06;
+const NOISE_ETA = 0.01;
+const A_STR = 0.8;
+const R_CUT = 0.28;
+const D_REPULSE = 0.05;
+const R_SOFT = 0.05;
+const ANGULAR_GAIN = 0.001;
+const R_CUT2 = R_CUT * R_CUT;
+const D_REPULSE2 = D_REPULSE * D_REPULSE;
+const CENTER_X = BOX_L * 0.5;
+const CENTER_Y = BOX_L * 0.5;
+const CONFINEMENT_RADIUS = BOX_L * 0.46;
+const CONFINEMENT_SOFTNESS = 0.05;
+const CONFINEMENT_PUSH = 0.08;
+const WALL_TANGENT_ALIGN = 0.10;
+const SPEED_GAIN = BOX_L;
+const CELL_SIZE = R_CUT;
+const GRID_N = Math.max(1, Math.ceil(BOX_L / CELL_SIZE));
+const INV_CELL_SIZE = 1 / CELL_SIZE;
+
+let pts = [];
+
+function resize() {
+  const pw = canvas.parentElement.parentElement.getBoundingClientRect().width;
+  SZ = Math.floor(Math.min(pw, 500));
+  canvas.width = SZ;
+  canvas.height = SZ;
+}
+
+function v0() {
+  return E_ratio <= 1.0 ? 0 : Math.min(3.5 * Math.sqrt(E_ratio - 1.0), 6.0) * SPEED_GAIN;
+}
+
+function init() {
+  pts = [];
+  for (let i = 0; i < N; i++) {
+    let x = CENTER_X;
+    let y = CENTER_Y;
+    for (let k = 0; k < 30; k++) {
+      const rx = BOX_L * (0.08 + Math.random() * 0.84);
+      const ry = BOX_L * (0.08 + Math.random() * 0.84);
+      const ddx = rx - CENTER_X;
+      const ddy = ry - CENTER_Y;
+      if (ddx * ddx + ddy * ddy <= CONFINEMENT_RADIUS * CONFINEMENT_RADIUS) {
+        x = rx;
+        y = ry;
+        break;
+      }
+    }
+    pts.push({
+      x,
+      y,
+      th: Math.random() * Math.PI * 2,
+    });
+  }
+}
+
+function step() {
+  const speed = v0();
+  const dth = new Float64Array(N);
+  const fx = new Float64Array(N);
+  const fy = new Float64Array(N);
+  const grid = Array.from({ length: GRID_N * GRID_N }, () => []);
+
+  for (let i = 0; i < N; i++) {
+    const p = pts[i];
+    const ix = Math.max(0, Math.min(GRID_N - 1, Math.floor(p.x * INV_CELL_SIZE)));
+    const iy = Math.max(0, Math.min(GRID_N - 1, Math.floor(p.y * INV_CELL_SIZE)));
+    grid[ix + iy * GRID_N].push(i);
+  }
+
+  for (let i = 0; i < N; i++) {
+    const pi = pts[i];
+    let sum_dth = 0;
+    const ix = Math.max(0, Math.min(GRID_N - 1, Math.floor(pi.x * INV_CELL_SIZE)));
+    const iy = Math.max(0, Math.min(GRID_N - 1, Math.floor(pi.y * INV_CELL_SIZE)));
+
+    for (let oy = -1; oy <= 1; oy++) {
+      const ny = iy + oy;
+      if (ny < 0 || ny >= GRID_N) continue;
+      for (let ox = -1; ox <= 1; ox++) {
+        const nx = ix + ox;
+        if (nx < 0 || nx >= GRID_N) continue;
+        const cell = grid[nx + ny * GRID_N];
+        for (let k = 0; k < cell.length; k++) {
+          const j = cell[k];
+          if (j === i) continue;
+          const pj = pts[j];
+          const dx = pj.x - pi.x;
+          const dy = pj.y - pi.y;
+          const r2 = dx * dx + dy * dy;
+
+          if (r2 < D_REPULSE2) {
+            const r = Math.sqrt(r2);
+            const f = (D_REPULSE - r) / D_REPULSE * 0.04;
+            fx[i] -= f * dx / (r + 1e-9);
+            fy[i] -= f * dy / (r + 1e-9);
+            continue;
+          }
+
+          if (r2 < R_CUT2) {
+            const phi = Math.atan2(dy, dx);
+            const invR2 = 1.0 / (r2 + R_SOFT * R_SOFT);
+            const align = A_STR * Math.sin(pj.th - pi.th);
+            const repelTorque = -B_str * Math.sin(pj.th + pi.th - 2.0 * phi);
+            const hydro = C_str * Math.cos(pj.th - pi.th);
+            sum_dth += ANGULAR_GAIN * (align + repelTorque + hydro) * invR2;
+          }
+        }
+      }
+    }
+
+    const cdx = pi.x - CENTER_X;
+    const cdy = pi.y - CENTER_Y;
+    const cr = Math.sqrt(cdx * cdx + cdy * cdy) + 1e-12;
+    const wallStart = CONFINEMENT_RADIUS - CONFINEMENT_SOFTNESS;
+    if (cr > wallStart) {
+      const q = Math.min(1, (cr - wallStart) / CONFINEMENT_SOFTNESS);
+      fx[i] -= CONFINEMENT_PUSH * q * (cdx / cr);
+      fy[i] -= CONFINEMENT_PUSH * q * (cdy / cr);
+    }
+
+    sum_dth += (Math.random() - 0.5) * NOISE_ETA * Math.PI * 2;
+    dth[i] = sum_dth;
+  }
+
+  let ox = 0, oy = 0;
+  for (let i = 0; i < N; i++) {
+    const p = pts[i];
+    p.th = Math.atan2(Math.sin(p.th + dth[i] * DT), Math.cos(p.th + dth[i] * DT));
+    p.x = p.x + (Math.cos(p.th) * speed + fx[i]) * DT / SZ;
+    p.y = p.y + (Math.sin(p.th) * speed + fy[i]) * DT / SZ;
+
+    const bdx = p.x - CENTER_X;
+    const bdy = p.y - CENTER_Y;
+    const br = Math.sqrt(bdx * bdx + bdy * bdy) + 1e-12;
+    if (br > CONFINEMENT_RADIUS) {
+      const nx = bdx / br;
+      const ny = bdy / br;
+      p.x = CENTER_X + nx * (CONFINEMENT_RADIUS - 1e-4);
+      p.y = CENTER_Y + ny * (CONFINEMENT_RADIUS - 1e-4);
+
+      const tx = -ny;
+      const ty = nx;
+      const vx = Math.cos(p.th);
+      const vy = Math.sin(p.th);
+      const sgn = (vx * tx + vy * ty) >= 0 ? 1 : -1;
+      const targetTh = Math.atan2(ty * sgn, tx * sgn);
+      p.th = Math.atan2(
+        Math.sin(p.th) * (1 - WALL_TANGENT_ALIGN) + Math.sin(targetTh) * WALL_TANGENT_ALIGN,
+        Math.cos(p.th) * (1 - WALL_TANGENT_ALIGN) + Math.cos(targetTh) * WALL_TANGENT_ALIGN
+      );
+    }
+
+    ox += Math.cos(p.th); oy += Math.sin(p.th);
+  }
+
+  const psi = Math.sqrt(ox*ox + oy*oy) / N;
+  const bar = document.getElementById('phasebar');
+  if (E_ratio <= 1.0) {
+    bar.textContent = `静止相 (E/Ec=${E_ratio.toFixed(2)}) — ローリング未発生`;
+  } else if (psi < 0.3) {
+    bar.textContent = `無秩序ガス相 — ψ=${psi.toFixed(2)} | ランダムウォーク`;
+  } else if (psi < 0.7) {
+    bar.textContent = `フロック形成中 — ψ=${psi.toFixed(2)} | 局所クラスター`;
+  } else {
+    bar.textContent = `極性液体相 — ψ=${psi.toFixed(2)} | 集団一方向流`;
+  }
+}
+
+function hsl(theta, dark) {
+  const h = ((theta / (Math.PI * 2)) * 360 + 360) % 360;
+  return dark ? `hsl(${h},75%,62%)` : `hsl(${h},80%,38%)`;
+}
+
+function draw() {
+  const dark = window.matchMedia('(prefers-color-scheme:dark)').matches;
+  ctx.fillStyle = dark ? '#111' : '#f7f7f5';
+  ctx.fillRect(0, 0, SZ, SZ);
+
+  ctx.beginPath();
+  ctx.arc(
+    (CENTER_X / BOX_L) * SZ,
+    (CENTER_Y / BOX_L) * SZ,
+    (CONFINEMENT_RADIUS / BOX_L) * SZ,
+    0,
+    Math.PI * 2
+  );
+  ctx.strokeStyle = dark ? '#2f3f4a' : '#cfd7dc';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  const R = SZ * 0.004;
+  const speed = v0();
+
+  for (const p of pts) {
+    const px = (p.x / BOX_L) * SZ, py = (p.y / BOX_L) * SZ;
+    const col = hsl(p.th, dark);
+
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(p.th);
+
+    ctx.beginPath();
+    ctx.arc(0, 0, R, 0, Math.PI * 2);
+    ctx.fillStyle = col;
+    ctx.globalAlpha = 0.85;
+    ctx.fill();
+
+    if (speed > 0.05) {
+      const alen = R + Math.min(speed * 1.8, R * 2.5);
+      ctx.beginPath();
+      ctx.moveTo(R, 0);
+      ctx.lineTo(alen, 0);
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 1.4;
+      ctx.globalAlpha = 0.7;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(alen, 0);
+      ctx.lineTo(alen - R * 0.55, -R * 0.35);
+      ctx.lineTo(alen - R * 0.55, R * 0.35);
+      ctx.closePath();
+      ctx.fillStyle = col;
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+}
+
+function loop() { step(); draw(); requestAnimationFrame(loop); }
+
+eSlider.addEventListener('input', e => {
+  E_ratio = parseInt(e.target.value)/100; eVal.textContent = E_ratio.toFixed(2);
+});
+nSlider.addEventListener('input', e => {
+  N = parseInt(e.target.value); nVal.textContent = N; init();
+});
+bSlider.addEventListener('input', e => {
+  B_str = parseInt(e.target.value)/100; bVal.textContent = B_str.toFixed(2);
+});
+cSlider.addEventListener('input', e => {
+  C_str = parseInt(e.target.value)/100; cVal.textContent = C_str.toFixed(2);
+});
+window.addEventListener('resize', () => { resize(); init(); });
+
+resize(); init(); loop();
+</script>
