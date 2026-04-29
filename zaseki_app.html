@@ -259,6 +259,12 @@ video {
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
 }
+.right-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
 .right-header h2 {
   font-family: 'Fraunces', serif;
   font-weight: 700;
@@ -270,6 +276,23 @@ video {
   font-size: 11px;
   margin-top: 2px;
   line-height: 1.5;
+}
+.btn-rotate-layout {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+}
+.btn-rotate-layout:hover { border-color: var(--accent); color: var(--accent); }
+.btn-rotate-layout.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(240, 160, 32, 0.1);
 }
 
 .groups-section {
@@ -381,6 +404,14 @@ video {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  transform-origin: center;
+  transition: transform 0.18s ease;
+}
+.tables-grid.rotated {
+  transform: rotate(180deg);
+}
+.tables-grid.rotated .table-num {
+  transform: rotate(180deg);
 }
 
 .block-row {
@@ -700,7 +731,10 @@ video {
   <!-- RIGHT -->
   <div class="right">
     <div class="right-header">
-      <h2>記録パネル</h2>
+      <div class="right-header-top">
+        <h2>記録パネル</h2>
+        <button class="btn-rotate-layout" id="rotateLayoutBtn" title="座席配置を180度回転">180°回転</button>
+      </div>
       <div class="desc">グループ選択 → 席クリックで <span style="color:var(--success)">入店</span> / もう一度で <span style="color:var(--danger)">退店</span> 記録</div>
     </div>
 
@@ -762,7 +796,8 @@ const state = {
   seatStates: {},        // seatId -> { groupId, enterTime } | null
   history: [],           // for undo: array of { events:[], seats:{seatId: previousState} }
   initialCheckMode: false,
-  initialCheckDone: false
+  initialCheckDone: false,
+  layoutRotated: false
 };
 
 // ============== DOM ==============
@@ -780,6 +815,7 @@ const tablesGrid = $('tablesGrid');
 const submitBtn = $('submitBtn');
 const undoBtn = $('undoBtn');
 const initCheckDoneBtn = $('initCheckDoneBtn');
+const rotateLayoutBtn = $('rotateLayoutBtn');
 const submitModal = $('submitModal');
 const toast = $('toast');
 
@@ -831,6 +867,11 @@ function startInitialCheckMode() {
   curTime.textContent = fmtTime(0);
   updateInitialCheckButton();
   showToast('初期配置チェック: 開始時点で着席している席をクリックしてください（1席=1グループ）');
+}
+
+function applyLayoutRotation() {
+  tablesGrid.classList.toggle('rotated', state.layoutRotated);
+  rotateLayoutBtn.classList.toggle('active', state.layoutRotated);
 }
 
 function getLastSeatEvent(seatId) {
@@ -962,7 +1003,7 @@ function handleSeatClick(seatId) {
     const groupId = createGroupAuto();
     state.activeGroupId = groupId;
     const undoStep = { events: [], seats: { [seatId]: null } };
-    const ev = { videoTime: 0, action: 'enter', seatId, groupId };
+    const ev = { videoTime: 0, action: 'enter', seatId, groupId, initialPlacement: true };
     state.events.push(ev);
     undoStep.events.push(ev);
     state.history.push(undoStep);
@@ -1000,7 +1041,7 @@ function handleSeatClick(seatId) {
     const groupId = sameTimeEnter ? sameTimeEnter.groupId : createGroupAuto();
     state.activeGroupId = groupId;
     const undoStep = { events: [], seats: { [seatId]: null } };
-    const ev = { videoTime: time, action: 'enter', seatId, groupId };
+    const ev = { videoTime: time, action: 'enter', seatId, groupId, initialPlacement: false };
     state.events.push(ev);
     undoStep.events.push(ev);
     state.history.push(undoStep);
@@ -1167,6 +1208,11 @@ $('nativeCtrlBtn').addEventListener('click', () => {
   $('nativeCtrlBtn').classList.toggle('active', video.controls);
 });
 
+rotateLayoutBtn.addEventListener('click', () => {
+  state.layoutRotated = !state.layoutRotated;
+  applyLayoutRotation();
+});
+
 // keyboard shortcuts
 document.addEventListener('keydown', (e) => {
   if (e.target.matches('input, textarea')) return;
@@ -1196,27 +1242,46 @@ function buildExport() {
   const sorted = [...state.events].sort((a,b) => a.videoTime - b.videoTime);
   for (const e of sorted) {
     if (e.action === 'enter') {
-      open[e.seatId] = { groupId: e.groupId, enterTime: e.videoTime };
+      open[e.seatId] = {
+        groupId: e.groupId,
+        enterTime: e.videoTime,
+        enteredFromStart: !!e.initialPlacement
+      };
     } else {
       const o = open[e.seatId];
       sessions.push({
         seatId: e.seatId,
         groupId: o ? o.groupId : e.groupId,
         enterTime: o ? o.enterTime : null,
-        leaveTime: e.videoTime
+        leaveTime: e.videoTime,
+        enteredFromStart: o ? !!o.enteredFromStart : false,
+        remainedUntilEnd: false
       });
       delete open[e.seatId];
     }
   }
   // ongoing sessions (not yet left)
   for (const [sid, o] of Object.entries(open)) {
-    sessions.push({ seatId: sid, groupId: o.groupId, enterTime: o.enterTime, leaveTime: null });
+    sessions.push({
+      seatId: sid,
+      groupId: o.groupId,
+      enterTime: o.enterTime,
+      leaveTime: null,
+      enteredFromStart: !!o.enteredFromStart,
+      remainedUntilEnd: true
+    });
   }
   return {
     videoTitle: titleInput.value.trim() || (state.videoFile ? state.videoFile.name : 'untitled'),
     videoFileName: state.videoFile ? state.videoFile.name : null,
     exportedAt: new Date().toISOString(),
-    layout: { rows: 8, patternPerRow: ['2x3', '2x3', '2x3', '2x3', '2x2'], totalTables: 40, totalSeats: 224 },
+    layout: {
+      rows: 8,
+      patternPerRow: ['2x3', '2x3', '2x3', '2x3', '2x2'],
+      totalTables: 40,
+      totalSeats: 224,
+      rotated180: state.layoutRotated
+    },
     groups: state.groups,
     events: sorted,
     sessions
@@ -1266,6 +1331,7 @@ initCheckDoneBtn.addEventListener('click', () => {
 buildSeatGrid();
 renderGroups();
 updateInitialCheckButton();
+applyLayoutRotation();
 </script>
 </body>
 </html>
