@@ -4,9 +4,120 @@
     .ctrl input[type=range] { flex: 1; }
     .ctrl span { font-size: 13px; font-weight: 500; min-width: 32px; text-align: right; color: var(--color-text-primary); }
     #canvas { display: block; border-radius: var(--border-radius-lg); border: 0.5px solid var(--color-border-tertiary); cursor: crosshair; touch-action: none; }
-    #wrap { display: flex; justify-content: center; }
-    #hint { font-size: 12px; color: var(--color-text-tertiary); text-align: center; margin-top: 6px; }
-    #bait-indicator { font-size: 12px; color: var(--color-text-secondary); text-align: center; height: 18px; margin-bottom: 4px; }
+    #wrap { display: flex; justify-content: center; position: relative; }
+    #hint { font-size: 12px; color: var(--color-text-tertiary); text-align: center; margin-top: 8px; line-height: 1.45; }
+    #bait-indicator { font-size: 12px; color: var(--color-text-secondary); text-align: center; min-height: 18px; margin-bottom: 6px; }
+
+    #order-panel {
+      margin: 10px 0 8px;
+      padding: 12px 14px;
+      border-radius: var(--border-radius-lg);
+      border: 1px solid var(--color-border-tertiary);
+      background: color-mix(in srgb, var(--color-bg-secondary, #f4f7fb) 88%, transparent);
+    }
+    @media (prefers-color-scheme: dark) {
+      #order-panel {
+        background: rgba(22, 34, 52, 0.65);
+        border-color: rgba(148, 163, 184, 0.22);
+      }
+    }
+    #order-panel .order-title {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: var(--color-text-primary);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    #order-panel .order-symbol {
+      font-weight: 500;
+      font-family: ui-serif, Georgia, 'Times New Roman', serif;
+      font-style: italic;
+      color: var(--color-text-secondary);
+    }
+    #order-panel .order-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    #order-panel .order-value {
+      font-size: 26px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+      min-width: 4.2ch;
+      color: var(--color-text-primary);
+    }
+    #order-panel .order-bar-track {
+      flex: 1;
+      min-width: 0;
+      height: 12px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--color-text-tertiary) 22%, transparent);
+      overflow: hidden;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.06);
+    }
+    @media (prefers-color-scheme: dark) {
+      #order-panel .order-bar-track {
+        background: rgba(148, 163, 184, 0.18);
+        box-shadow: inset 0 1px 3px rgba(0,0,0,0.35);
+      }
+    }
+    #order-panel .order-bar-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: 999px;
+      background: #64748b;
+      transition: width 90ms linear;
+    }
+    @media (prefers-color-scheme: dark) {
+      #order-panel .order-bar-fill {
+        background: #94a3b8;
+      }
+    }
+    #order-panel .order-caption {
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--color-text-tertiary);
+      line-height: 1.45;
+    }
+    #order-panel .order-caption strong {
+      color: var(--color-text-secondary);
+      font-weight: 600;
+    }
+
+    .sim-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 6px 0 2px;
+    }
+    #pauseBtn {
+      font-size: 13px;
+      font-weight: 500;
+      padding: 7px 14px;
+      border-radius: var(--border-radius-lg);
+      border: 1px solid var(--color-border-tertiary);
+      background: var(--color-bg-primary, #fff);
+      color: var(--color-text-primary);
+      cursor: pointer;
+    }
+    #pauseBtn:hover {
+      background: var(--color-bg-secondary, #f4f7fb);
+    }
+    #pauseBtn[aria-pressed="true"] {
+      border-color: rgba(59, 130, 246, 0.45);
+      background: rgba(59, 130, 246, 0.12);
+    }
+    @media (prefers-color-scheme: dark) {
+      #pauseBtn[aria-pressed="true"] {
+        border-color: rgba(96, 165, 250, 0.45);
+        background: rgba(59, 130, 246, 0.18);
+      }
+    }
   </style>
   
   <div style="padding: 0.75rem 0 0.5rem;">
@@ -26,9 +137,23 @@
       <span id="baitVal">0.60</span>
     </div>
   </div>
+
+  <div class="sim-toolbar">
+    <button type="button" id="pauseBtn" aria-pressed="false">一時停止</button>
+  </div>
+
+  <div id="order-panel" aria-live="polite">
+    <div class="order-title">秩序パラメータ（極性の大きさ） <span class="order-symbol">|⟨v⟩|</span></div>
+    <div class="order-row">
+      <span class="order-value" id="orderVal">—</span>
+      <div class="order-bar-track" role="img" aria-label="秩序の強さ（0〜1）"><div class="order-bar-fill" id="orderBar"></div></div>
+    </div>
+    <div class="order-caption"><strong>|⟨v⟩|</strong> は 1 に近いほど全員が同じ向き、0 に近いほどバラバラ。右のバーがその目安です。</div>
+  </div>
+
   <div id="bait-indicator">画面をタップ / クリックして餌を置く</div>
   <div id="wrap"><canvas id="canvas"></canvas></div>
-  <div id="hint">タップした方向に群れが引き寄せられます。餌は時間とともに消えます。</div>
+  <div id="hint">タップした方向に群れが引き寄せられます。餌は時間とともに消えます。左下の円は<strong>平均速度⟨v⟩の向き</strong>（矢印の長さは秩序に比例）。</div>
   
   <script>
   const canvas = document.getElementById('canvas');
@@ -41,7 +166,11 @@
   const noiseVal = document.getElementById('noiseVal');
   const baitVal = document.getElementById('baitVal');
   const baitIndicator = document.getElementById('bait-indicator');
-  
+  const orderVal = document.getElementById('orderVal');
+  const orderBar = document.getElementById('orderBar');
+  const pauseBtn = document.getElementById('pauseBtn');
+
+  let paused = false;
   let N = 100, noise = 0.2, baitStrength = 0.6;
   let bait = null, baitTimer = 0;
   const BAIT_DURATION = 150;
@@ -69,6 +198,21 @@
     }
   }
   
+  /** 秩序パラメータ |⟨v⟩| と平均速度方向（単位ベクトル） */
+  function orderStats() {
+    let sx = 0;
+    let sy = 0;
+    for (let i = 0; i < agents.length; i++) {
+      const a = agents[i];
+      sx += Math.cos(a.angle);
+      sy += Math.sin(a.angle);
+    }
+    const n = agents.length || 1;
+    const mag = Math.hypot(sx, sy) / n;
+    const inv = n * Math.max(mag, 1e-12);
+    return { mag, nx: sx / inv, ny: sy / inv };
+  }
+
   function wrapDist(dx, dy) {
     if (dx > SZ/2) dx -= SZ;
     if (dx < -SZ/2) dx += SZ;
@@ -135,45 +279,103 @@
   
   function draw() {
     const dark = isDark();
-  ctx.fillStyle = dark ? '#123347' : '#CFEFFF';
+    ctx.fillStyle = dark ? '#0f172a' : '#f1f5f9';
     ctx.fillRect(0, 0, SZ, SZ);
-  
+
+    const stats = orderStats();
+    orderVal.textContent = stats.mag.toFixed(3);
+    orderBar.style.width = Math.min(100, Math.max(0, stats.mag * 100)) + '%';
+
     if (bait) {
       const decay = Math.max(0, 1 - baitTimer / BAIT_DURATION);
       ctx.save();
-      ctx.globalAlpha = 0.13 * decay;
+      ctx.globalAlpha = 0.14 * decay;
       ctx.beginPath();
       ctx.arc(bait.x, bait.y, BAIT_RADIUS, 0, Math.PI * 2);
-      ctx.fillStyle = dark ? '#FFD37A' : '#F2B55F';
+      ctx.fillStyle = dark ? '#fb923c' : '#ea580c';
       ctx.fill();
       ctx.globalAlpha = 1;
       ctx.beginPath();
       ctx.arc(bait.x, bait.y, 5, 0, Math.PI * 2);
-      ctx.fillStyle = dark ? '#FFE39B' : '#CC8D3A';
+      ctx.fillStyle = dark ? '#fdba74' : '#c2410c';
       ctx.fill();
       ctx.restore();
     }
-  
-    const arrowColor = dark ? '#7FE4D2' : '#1E8F7A';
-    ctx.fillStyle = arrowColor;
-  
+
+    const arrowFill = dark ? '#7dd3fc' : '#0369a1';
+    const arrowEdge = dark ? 'rgba(15,23,42,0.35)' : 'rgba(255,255,255,0.5)';
     agents.forEach(a => {
       ctx.save();
-      ctx.globalAlpha = 0.78;
+      ctx.globalAlpha = 0.9;
       ctx.translate(a.x, a.y);
       ctx.rotate(a.angle);
       ctx.beginPath();
-      ctx.moveTo(6, 0);
-      ctx.lineTo(-4, 3);
-      ctx.lineTo(-2.5, 0);
-      ctx.lineTo(-4, -3);
+      ctx.moveTo(6.5, 0);
+      ctx.lineTo(-4.2, 3.2);
+      ctx.lineTo(-2.6, 0);
+      ctx.lineTo(-4.2, -3.2);
       ctx.closePath();
+      ctx.fillStyle = arrowFill;
       ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = arrowEdge;
+      ctx.stroke();
       ctx.restore();
     });
+
+    /* 平均速度の向き（秩序が高いほど矢印が長く見える） */
+    const box = 56;
+    const pad = 12;
+    const ox = pad + box / 2;
+    const oy = SZ - pad - box / 2 - 2;
+    ctx.save();
+    ctx.fillStyle = dark ? 'rgba(30,41,59,0.85)' : 'rgba(255,255,255,0.9)';
+    ctx.strokeStyle = dark ? 'rgba(148,163,184,0.4)' : 'rgba(148,163,184,0.55)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(ox, oy, box / 2 + 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.strokeStyle = dark ? 'rgba(148,163,184,0.45)' : 'rgba(100,116,139,0.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(ox, oy, box / 2 - 5, 0, Math.PI * 2);
+    ctx.stroke();
+    const arrowLen = (box / 2 - 9) * stats.mag;
+    ctx.strokeStyle = dark ? '#e2e8f0' : '#475569';
+    ctx.fillStyle = dark ? '#e2e8f0' : '#475569';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(ox, oy);
+    ctx.lineTo(ox + stats.nx * arrowLen, oy + stats.ny * arrowLen);
+    ctx.stroke();
+    if (stats.mag > 0.02) {
+      const hx = ox + stats.nx * arrowLen;
+      const hy = oy + stats.ny * arrowLen;
+      const ang = Math.atan2(stats.ny, stats.nx);
+      const ah = 0.55;
+      ctx.beginPath();
+      ctx.moveTo(hx, hy);
+      ctx.lineTo(hx - 9 * Math.cos(ang - ah), hy - 9 * Math.sin(ang - ah));
+      ctx.lineTo(hx - 9 * Math.cos(ang + ah), hy - 9 * Math.sin(ang + ah));
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
   }
   
-  function loop() { step(); draw(); requestAnimationFrame(loop); }
+  function loop() {
+    if (!paused) step();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  pauseBtn.addEventListener('click', () => {
+    paused = !paused;
+    pauseBtn.textContent = paused ? '再開' : '一時停止';
+    pauseBtn.setAttribute('aria-pressed', paused ? 'true' : 'false');
+  });
   
   function getPos(e) {
     const rect = canvas.getBoundingClientRect();

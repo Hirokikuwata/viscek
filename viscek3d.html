@@ -1,0 +1,356 @@
+<style>
+  .ctrl { display: flex; align-items: center; gap: 10px; margin: 5px 0; }
+  .ctrl label { font-size: 13px; color: var(--color-text-secondary); min-width: 100px; }
+  .ctrl input[type=range] { flex: 1; }
+  .ctrl span { font-size: 13px; font-weight: 500; min-width: 40px; text-align: right; color: var(--color-text-primary); }
+  #wrap3d { display: flex; justify-content: center; position: relative; }
+  #canvas3d { display: block; border-radius: var(--border-radius-lg); border: 0.5px solid var(--color-border-tertiary); cursor: grab; touch-action: none; }
+  #canvas3d:active { cursor: grabbing; }
+  #orderLine { font-size: 12px; color: var(--color-text-secondary); text-align: center; margin-bottom: 6px; font-variant-numeric: tabular-nums; }
+  #hint3d { font-size: 11px; color: var(--color-text-tertiary); text-align: center; margin-top: 6px; }
+</style>
+
+<div style="padding: 0.75rem 0 0.5rem;">
+  <div class="ctrl">
+    <label>粒子数 N</label>
+    <input type="range" id="n3dSlider" min="40" max="400" step="20" value="160">
+    <span id="n3dVal">160</span>
+  </div>
+  <div class="ctrl">
+    <label>揺らぎ η</label>
+    <input type="range" id="noise3dSlider" min="0" max="100" step="1" value="18">
+    <span id="noise3dVal">0.18</span>
+  </div>
+  <div class="ctrl">
+    <label>近傍半径 R</label>
+    <input type="range" id="radius3dSlider" min="5" max="35" step="1" value="14">
+    <span id="radius3dVal">0.14</span>
+  </div>
+  <div class="ctrl">
+    <label>速度</label>
+    <input type="range" id="speed3dSlider" min="5" max="40" step="1" value="16">
+    <span id="speed3dVal">1.6</span>
+  </div>
+</div>
+<div id="orderLine">秩序変数 |⟨v⟩| = —</div>
+<div id="wrap3d"></div>
+<div id="hint3d">ドラッグで視点回転。3次元トーラス上の Vicsek（速度は単位ベクトル、近傍の平均方向＋角ノイズ）。</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function () {
+  const wrap = document.getElementById('wrap3d');
+  const orderLine = document.getElementById('orderLine');
+  const nSlider = document.getElementById('n3dSlider');
+  const noiseSlider = document.getElementById('noise3dSlider');
+  const radiusSlider = document.getElementById('radius3dSlider');
+  const speedSlider = document.getElementById('speed3dSlider');
+  const nVal = document.getElementById('n3dVal');
+  const noiseVal = document.getElementById('noise3dVal');
+  const radiusVal = document.getElementById('radius3dVal');
+  const speedVal = document.getElementById('speed3dVal');
+
+  let N = 160;
+  let eta = 0.18;
+  let radiusFrac = 0.14;
+  let speed = 1.6;
+
+  const L = 200;
+  let SZ = 420;
+
+  let agents = [];
+  const up = new THREE.Vector3(0, 1, 0);
+  const tmpV = new THREE.Vector3();
+  const tmpQ = new THREE.Quaternion();
+
+  function randUnitSphere() {
+    const u = Math.random();
+    const v = Math.random();
+    const theta = 2 * Math.PI * u;
+    const phi = Math.acos(2 * v - 1);
+    const sinp = Math.sin(phi);
+    return {
+      vx: sinp * Math.cos(theta),
+      vy: Math.cos(phi),
+      vz: sinp * Math.sin(theta)
+    };
+  }
+
+  function wrapCoord(x) {
+    let t = x % L;
+    if (t < 0) t += L;
+    return t;
+  }
+
+  function wrapDelta(d) {
+    if (d > L / 2) d -= L;
+    if (d < -L / 2) d += L;
+    return d;
+  }
+
+  function distSq(ai, aj) {
+    const dx = wrapDelta(aj.x - ai.x);
+    const dy = wrapDelta(aj.y - ai.y);
+    const dz = wrapDelta(aj.z - ai.z);
+    return dx * dx + dy * dy + dz * dz;
+  }
+
+  function normalize3(x, y, z) {
+    const len = Math.hypot(x, y, z);
+    if (len < 1e-10) return null;
+    return { vx: x / len, vy: y / len, vz: z / len };
+  }
+
+  /** 単位ベクトル v に、接線方向の角ノイズ（最大角 ~ η·π） */
+  function addAngularNoise(vx, vy, vz, etaNoise) {
+    let ax = Math.random() - 0.5;
+    let ay = Math.random() - 0.5;
+    let az = Math.random() - 0.5;
+    let px = ay * vz - az * vy;
+    let py = az * vx - ax * vz;
+    let pz = ax * vy - ay * vx;
+    let pl = Math.hypot(px, py, pz);
+    if (pl < 1e-8) return addAngularNoise(vx, vy, vz, etaNoise);
+    px /= pl;
+    py /= pl;
+    pz /= pl;
+    const ang = (Math.random() - 0.5) * 2 * etaNoise * Math.PI;
+    const c = Math.cos(ang);
+    const s = Math.sin(ang);
+    const qx = py * vz - pz * vy;
+    const qy = pz * vx - px * vz;
+    const qz = px * vy - py * vx;
+    return normalize3(vx * c + qx * s, vy * c + qy * s, vz * c + qz * s);
+  }
+
+  function initAgents() {
+    agents = [];
+    for (let i = 0; i < N; i++) {
+      const o = randUnitSphere();
+      agents.push({
+        x: Math.random() * L,
+        y: Math.random() * L,
+        z: Math.random() * L,
+        vx: o.vx,
+        vy: o.vy,
+        vz: o.vz
+      });
+    }
+  }
+
+  function step() {
+    const R = radiusFrac * L;
+    const R2 = R * R;
+    const next = [];
+
+    for (let i = 0; i < agents.length; i++) {
+      const a = agents[i];
+      let sx = a.vx;
+      let sy = a.vy;
+      let sz = a.vz;
+      for (let j = 0; j < agents.length; j++) {
+        if (i === j) continue;
+        const b = agents[j];
+        if (distSq(a, b) < R2) {
+          sx += b.vx;
+          sy += b.vy;
+          sz += b.vz;
+        }
+      }
+      let nv = normalize3(sx, sy, sz);
+      if (!nv) nv = { vx: a.vx, vy: a.vy, vz: a.vz };
+      const noisy = addAngularNoise(nv.vx, nv.vy, nv.vz, eta);
+      if (noisy) nv = noisy;
+      next.push({
+        x: wrapCoord(a.x + nv.vx * speed),
+        y: wrapCoord(a.y + nv.vy * speed),
+        z: wrapCoord(a.z + nv.vz * speed),
+        vx: nv.vx,
+        vy: nv.vy,
+        vz: nv.vz
+      });
+    }
+    agents = next;
+  }
+
+  function orderParameter() {
+    let mx = 0;
+    let my = 0;
+    let mz = 0;
+    for (let i = 0; i < agents.length; i++) {
+      const a = agents[i];
+      mx += a.vx;
+      my += a.vy;
+      mz += a.vz;
+    }
+    return Math.hypot(mx, my, mz) / agents.length;
+  }
+
+  let renderer, scene, camera, cones = [];
+  let camTheta = 0.85;
+  let camPhi = 1.05;
+  let camDist = 340;
+  let dragging = false;
+  let lastX = 0;
+  let lastY = 0;
+
+  function isDark() {
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  }
+
+  function resize() {
+    const pw = wrap.parentElement ? wrap.parentElement.getBoundingClientRect().width : 480;
+    SZ = Math.floor(Math.min(pw - 8, 520));
+    if (SZ < 280) SZ = 280;
+    if (renderer) {
+      renderer.setSize(SZ, SZ);
+      camera.aspect = 1;
+      camera.updateProjectionMatrix();
+    }
+  }
+
+  function updateCamera() {
+    camPhi = Math.max(0.12, Math.min(Math.PI - 0.12, camPhi));
+    const sinp = Math.sin(camPhi);
+    camera.position.set(
+      camDist * sinp * Math.cos(camTheta),
+      camDist * Math.cos(camPhi),
+      camDist * sinp * Math.sin(camTheta)
+    );
+    camera.lookAt(L / 2, L / 2, L / 2);
+  }
+
+  function initThree() {
+    scene = new THREE.Scene();
+    const dark = isDark();
+    scene.background = new THREE.Color(dark ? 0x0d1f2c : 0xcfefff);
+
+    camera = new THREE.PerspectiveCamera(50, 1, 1, 2000);
+    updateCamera();
+
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(SZ, SZ);
+    wrap.appendChild(renderer.domElement);
+    renderer.domElement.id = 'canvas3d';
+
+    const amb = new THREE.AmbientLight(0xffffff, 0.55);
+    scene.add(amb);
+    const dir = new THREE.DirectionalLight(0xffffff, 0.75);
+    dir.position.set(40, 120, 60);
+    scene.add(dir);
+
+    const boxGeom = new THREE.BoxGeometry(L, L, L);
+    const boxEdges = new THREE.EdgesGeometry(boxGeom);
+    const boxMat = new THREE.LineBasicMaterial({
+      color: dark ? 0x4a7a8c : 0x3a8a7a,
+      transparent: true,
+      opacity: 0.45
+    });
+    const boxLines = new THREE.LineSegments(boxEdges, boxMat);
+    boxLines.position.set(L / 2, L / 2, L / 2);
+    scene.add(boxLines);
+
+    const coneGeom = new THREE.ConeGeometry(1.1, 4.2, 8);
+    const coneMat = new THREE.MeshPhongMaterial({
+      color: dark ? 0x5fe4d2 : 0x1e8f7a,
+      shininess: 48,
+      transparent: true,
+      opacity: 0.88
+    });
+
+    for (let i = 0; i < 400; i++) {
+      const mesh = new THREE.Mesh(coneGeom, coneMat);
+      mesh.visible = false;
+      scene.add(mesh);
+      cones.push(mesh);
+    }
+
+    const el = renderer.domElement;
+    el.addEventListener('mousedown', e => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+    window.addEventListener('mouseup', () => { dragging = false; });
+    el.addEventListener('mousemove', e => {
+      if (!dragging) return;
+      camTheta -= (e.clientX - lastX) * 0.006;
+      camPhi -= (e.clientY - lastY) * 0.006;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      updateCamera();
+    });
+    el.addEventListener('touchstart', e => {
+      if (e.touches.length !== 1) return;
+      dragging = true;
+      lastX = e.touches[0].clientX;
+      lastY = e.touches[0].clientY;
+    }, { passive: true });
+    el.addEventListener('touchend', () => { dragging = false; });
+    el.addEventListener('touchmove', e => {
+      if (!dragging || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      camTheta -= (t.clientX - lastX) * 0.006;
+      camPhi -= (t.clientY - lastY) * 0.006;
+      lastX = t.clientX;
+      lastY = t.clientY;
+      updateCamera();
+      e.preventDefault();
+    }, { passive: false });
+  }
+
+  function syncCones() {
+    const n = agents.length;
+    for (let i = 0; i < cones.length; i++) {
+      const mesh = cones[i];
+      if (i >= n) {
+        mesh.visible = false;
+        continue;
+      }
+      mesh.visible = true;
+      const a = agents[i];
+      mesh.position.set(a.x, a.y, a.z);
+      tmpV.set(a.vx, a.vy, a.vz).normalize();
+      tmpQ.setFromUnitVectors(up, tmpV);
+      mesh.quaternion.copy(tmpQ);
+    }
+  }
+
+  let frame = 0;
+  function loop() {
+    step();
+    frame++;
+    if (frame % 4 === 0) {
+      const op = orderParameter();
+      orderLine.textContent = '秩序変数 |⟨v⟩| = ' + op.toFixed(3) + '（1 に近いほど大域的な向き揃い）';
+    }
+    syncCones();
+    renderer.render(scene, camera);
+    requestAnimationFrame(loop);
+  }
+
+  nSlider.addEventListener('input', () => {
+    N = parseInt(nSlider.value, 10);
+    nVal.textContent = N;
+    initAgents();
+  });
+  noiseSlider.addEventListener('input', () => {
+    eta = parseInt(noiseSlider.value, 10) / 100;
+    noiseVal.textContent = eta.toFixed(2);
+  });
+  radiusSlider.addEventListener('input', () => {
+    radiusFrac = parseInt(radiusSlider.value, 10) / 100;
+    radiusVal.textContent = radiusFrac.toFixed(2);
+  });
+  speedSlider.addEventListener('input', () => {
+    speed = parseInt(speedSlider.value, 10) / 10;
+    speedVal.textContent = speed.toFixed(1);
+  });
+
+  window.addEventListener('resize', () => {
+    resize();
+  });
+
+  initThree();
+  resize();
+  initAgents();
+  loop();
+})();
+</script>
